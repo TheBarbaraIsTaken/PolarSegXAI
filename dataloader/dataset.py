@@ -114,7 +114,7 @@ class voxel_dataset(data.Dataset):
         intervals = crop_range/(cur_grid_size-1)
         if (intervals==0).any(): print("Zero interval!")
         
-        grid_ind = (np.floor((np.clip(xyz,min_bound,max_bound)-min_bound)/intervals)).astype(np.int)
+        grid_ind = (np.floor((np.clip(xyz,min_bound,max_bound)-min_bound)/intervals)).astype(np.int64)
 
         # process voxel position
         voxel_position = np.zeros(self.grid_size,dtype = np.float32)
@@ -221,7 +221,7 @@ class spherical_dataset(data.Dataset):
         intervals = crop_range/(cur_grid_size-1)
 
         if (intervals==0).any(): print("Zero interval!")
-        grid_ind = (np.floor((np.clip(xyz_pol,min_bound,max_bound)-min_bound)/intervals)).astype(np.int)
+        grid_ind = (np.floor((np.clip(xyz_pol,min_bound,max_bound)-min_bound)/intervals)).astype(np.int64)
 
         # process voxel position
         voxel_position = np.zeros(self.grid_size,dtype = np.float32)
@@ -265,7 +265,7 @@ class spherical_dataset(data.Dataset):
         if self.return_test:
             data_tuple += (grid_ind,labels,return_fea,index)
         else:
-            data_tuple += (grid_ind,labels,return_fea)
+            data_tuple += (grid_ind,labels,return_fea,index)
         return data_tuple
     
 @nb.jit('u1[:,:,:](u1[:,:,:],i8[:,:])',nopython=True,cache=True,parallel = False)
@@ -290,7 +290,8 @@ def collate_fn_BEV(data):
     grid_ind_stack = [d[2] for d in data]
     point_label = [d[3] for d in data]
     xyz = [d[4] for d in data]
-    return torch.from_numpy(data2stack),torch.from_numpy(label2stack),grid_ind_stack,point_label,xyz
+    index = [d[5] for d in data]
+    return torch.from_numpy(data2stack),torch.from_numpy(label2stack),grid_ind_stack,point_label,xyz,index
 
 def collate_fn_BEV_test(data):    
     data2stack=np.stack([d[0] for d in data]).astype(np.float32)

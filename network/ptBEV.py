@@ -16,6 +16,8 @@ class ptBEVnet(nn.Module):
         assert pt_pooling in ['max']
         assert pt_selection in ['random','farthest']
         
+        # fea_dim=9
+        # out_pt_fea_dim=512
         if pt_model == 'pointnet':
             self.PPmodel = nn.Sequential(
                 nn.BatchNorm1d(fea_dim),
@@ -65,29 +67,32 @@ class ptBEVnet(nn.Module):
         
     def forward(self, pt_fea, xy_ind, voxel_fea=None):
         cur_dev = pt_fea[0].get_device()
+        cur_dev = 'cpu'
         
         # concate everything
         cat_pt_ind = []
         for i_batch in range(len(xy_ind)):
             cat_pt_ind.append(F.pad(xy_ind[i_batch],(1,0),'constant',value = i_batch))
 
-        cat_pt_fea = torch.cat(pt_fea,dim = 0)
-        cat_pt_ind = torch.cat(cat_pt_ind,dim = 0)
+        cat_pt_fea = torch.cat(pt_fea,dim = 0)  # contains: centered data on each voxel (3), polar coord (3), xyz (2), reflection value (1)
+        cat_pt_ind = torch.cat(cat_pt_ind,dim = 0)  # contians: 0 padding, 2 coord
+        #print("DIMS:",cat_pt_fea.shape, cat_pt_ind.shape)  # torch.Size([123389, 9]) torch.Size([123389, 3])
         pt_num = cat_pt_ind.shape[0]
 
         # shuffle the data
         shuffled_ind = torch.randperm(pt_num,device = cur_dev)
         cat_pt_fea = cat_pt_fea[shuffled_ind,:]
         cat_pt_ind = cat_pt_ind[shuffled_ind,:]
-        
         # unique xy grid index
         unq, unq_inv, unq_cnt = torch.unique(cat_pt_ind,return_inverse=True, return_counts=True, dim=0)
         unq = unq.type(torch.int64)
+        #print("SHUFFLED SHAPE", shuffled_ind.shape)
+        print("UNIQUE SHAPE:", unq.shape)
         
         # subsample pts
         if self.pt_selection == 'random':
             grp_ind = grp_range_torch(unq_cnt,cur_dev)[torch.argsort(torch.argsort(unq_inv))]
-            remain_ind = grp_ind < self.max_pt
+            remain_ind = grp_ind < self.max_pt  # All true list
         elif self.pt_selection == 'farthest':
             unq_ind = np.split(np.argsort(unq_inv.detach().cpu().numpy()), np.cumsum(unq_cnt.detach().cpu().numpy()[:-1]))
             remain_ind = np.zeros((pt_num,),dtype = np.bool)
@@ -113,6 +118,7 @@ class ptBEVnet(nn.Module):
         cat_pt_ind = cat_pt_ind[remain_ind,:]
         unq_inv = unq_inv[remain_ind]
         unq_cnt = torch.clamp(unq_cnt,max=self.max_pt)
+        print("DIMS:", cat_pt_fea.shape, cat_pt_ind.shape)
         
         # process feature
         if self.pt_model == 'pointnet':
@@ -128,16 +134,22 @@ class ptBEVnet(nn.Module):
             processed_pooled_data = pooled_data
         
         # stuff pooled data into 4D tensor
-        out_data_dim = [len(pt_fea),self.grid_size[0],self.grid_size[1],self.pt_fea_dim]
+        print("COMPRESSED SHAPE:", processed_pooled_data.shape)
+        out_data_dim = [len(pt_fea),self.grid_size[0],self.grid_size[1],self.pt_fea_dim]  # 32
+        print("OUT SHAPE:", out_data_dim)
         out_data = torch.zeros(out_data_dim, dtype=torch.float32).to(cur_dev)
-        out_data[unq[:,0],unq[:,1],unq[:,2],:] = processed_pooled_data
-        out_data = out_data.permute(0,3,1,2)
+        out_data[unq[:,0],unq[:,1],unq[:,2],:] = processed_pooled_data  # Put back to the right order
+        out_data = out_data.permute(0,3,1,2)  # Change dimensions
         if self.local_pool_op != None:
             out_data = self.local_pool_op(out_data)
         if voxel_fea is not None:
             out_data = torch.cat((out_data, voxel_fea), 1)
+
+        return out_data
+        #print("FIRST MODEL OUTPUT:", (out_data > 0).sum())
         
         # run through network
+        print("RETURN SHAPE:", out_data.shape)
         net_return_data = self.BEV_model(out_data)
         
         return net_return_data

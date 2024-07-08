@@ -51,7 +51,7 @@ def main(args):
     output_path = args.test_output_path
     compression_model = args.grid_size[2]
     grid_size = args.grid_size
-    pytorch_device = torch.device('cuda:0')
+    pytorch_device = torch.device('cpu')  # Run on CPU
     model = args.model
     if model == 'polar':
         fea_dim = 9
@@ -69,7 +69,7 @@ def main(args):
     my_model = ptBEVnet(my_BEV_model, pt_model = 'pointnet', grid_size =  grid_size, fea_dim = fea_dim, max_pt_per_encode = 256,
                             out_pt_fea_dim = 512, kernal_size = 1, pt_selection = 'random', fea_compre = compression_model)
     if os.path.exists(model_save_path):
-        my_model.load_state_dict(torch.load(model_save_path))
+        my_model.load_state_dict(torch.load(model_save_path, map_location=torch.device('cpu')))  # Run on CPU
     my_model.to(pytorch_device)
 
     # prepare dataset
@@ -101,24 +101,42 @@ def main(args):
     hist_list = []
     time_list = []
     with torch.no_grad():
-        for i_iter_val,(_,val_vox_label,val_grid,val_pt_labs,val_pt_fea) in enumerate(val_dataset_loader):
+        for i_iter_val,(_,val_vox_label,val_grid,val_pt_labs,val_pt_fea,val_index) in enumerate(val_dataset_loader):
             val_vox_label = SemKITTI2train(val_vox_label)
             val_pt_labs = SemKITTI2train(val_pt_labs)
             val_pt_fea_ten = [torch.from_numpy(i).type(torch.FloatTensor).to(pytorch_device) for i in val_pt_fea]
             val_grid_ten = [torch.from_numpy(i[:,:2]).to(pytorch_device) for i in val_grid]
             val_label_tensor=val_vox_label.type(torch.LongTensor).to(pytorch_device)
 
-            torch.cuda.synchronize()
+            #torch.cuda.synchronize()
             start_time = time.time()
             predict_labels = my_model(val_pt_fea_ten, val_grid_ten)
-            torch.cuda.synchronize()
+            #torch.cuda.synchronize()
             time_list.append(time.time()-start_time)
 
             predict_labels = torch.argmax(predict_labels,dim=1)
             predict_labels = predict_labels.cpu().detach().numpy()
+
+            # Save predicted labels
+            id = val_pt_dataset.im_idx[val_index[0]].split("sequences/")[1]
+            label_output_path = f"out/predicted_labels/{id[:2]}/{id.split('velodyne/')[1][:6]}.npy"
+            feature_output_path = f"out/predicted_labels/{id[:2]}/{id.split('velodyne/')[1][:6]}_features.npy"
+ 
+            directory = os.path.dirname(label_output_path)
+            if not os.path.exists(directory):
+                os.makedirs(directory)
+
+            np.save(label_output_path, predict_labels[0])
+            np.save(feature_output_path, val_pt_fea)
+
             for count,i_val_grid in enumerate(val_grid):
                 hist_list.append(fast_hist_crop(predict_labels[count,val_grid[count][:,0],val_grid[count][:,1],val_grid[count][:,2]],val_pt_labs[count],unique_label))
             pbar.update(1)
+
+            # Limit evaluations
+            if i_iter_val >= 0:
+                break
+
     iou = per_class_iu(sum(hist_list))
     print('Validation per class iou: ')
     for class_name, class_iou in zip(unique_label_str,iou):
@@ -130,6 +148,8 @@ def main(args):
     print('Inference time per %d is %.4f seconds\n' %
         (test_batch_size,np.mean(time_list)))
     
+    
+    """
     # test
     print('*'*80)
     print('Generate predictions for test split')
@@ -161,10 +181,14 @@ def main(args):
                 test_pred_label = test_pred_label.astype(np.uint32)
                 test_pred_label.tofile(new_save_dir)
             pbar.update(1)
+
+            if i_iter_test >= 2:
+                break
+
     del test_grid,test_pt_fea,test_index
     pbar.close()
     print('Predicted test labels are saved in %s. Need to be shifted to original label format before submitting to the Competition website.' % output_path)
-    print('Remapping script can be found in semantic-kitti-api.')
+    print('Remapping script can be found in semantic-kitti-api.')"""
 
 if __name__ == '__main__':
     # Testing settings
