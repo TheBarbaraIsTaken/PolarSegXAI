@@ -11,7 +11,7 @@ import torch_scatter
 class ptBEVnet(nn.Module):
     
     def __init__(self, BEV_net, grid_size, pt_model = 'pointnet', fea_dim = 3, pt_pooling = 'max', kernal_size = 3,
-                 out_pt_fea_dim = 64, max_pt_per_encode = 64, cluster_num = 4, pt_selection = 'farthest', fea_compre = None):
+                 out_pt_fea_dim = 64, max_pt_per_encode = 64, cluster_num = 4, pt_selection = 'farthest', fea_compre = None, explain=False):
         super(ptBEVnet, self).__init__()
         assert pt_pooling in ['max']
         assert pt_selection in ['random','farthest']
@@ -37,6 +37,7 @@ class ptBEVnet(nn.Module):
                 nn.Linear(256, out_pt_fea_dim)
             )
         
+        self.explain = explain
         self.pt_model = pt_model
         self.BEV_model = BEV_net
         self.pt_pooling = pt_pooling
@@ -87,7 +88,8 @@ class ptBEVnet(nn.Module):
         unq, unq_inv, unq_cnt = torch.unique(cat_pt_ind,return_inverse=True, return_counts=True, dim=0)
         unq = unq.type(torch.int64)
         #print("SHUFFLED SHAPE", shuffled_ind.shape)
-        print("UNIQUE SHAPE:", unq.shape)
+        if not self.explain:
+            print("UNIQUE SHAPE:", unq.shape)
         
         # subsample pts
         if self.pt_selection == 'random':
@@ -118,7 +120,8 @@ class ptBEVnet(nn.Module):
         cat_pt_ind = cat_pt_ind[remain_ind,:]
         unq_inv = unq_inv[remain_ind]
         unq_cnt = torch.clamp(unq_cnt,max=self.max_pt)
-        print("DIMS:", cat_pt_fea.shape, cat_pt_ind.shape)
+        if not self.explain:
+            print("DIMS:", cat_pt_fea.shape, cat_pt_ind.shape)
         
         # process feature
         if self.pt_model == 'pointnet':
@@ -134,9 +137,11 @@ class ptBEVnet(nn.Module):
             processed_pooled_data = pooled_data
         
         # stuff pooled data into 4D tensor
-        print("COMPRESSED SHAPE:", processed_pooled_data.shape)
+        if not self.explain:
+            print("COMPRESSED SHAPE:", processed_pooled_data.shape)
         out_data_dim = [len(pt_fea),self.grid_size[0],self.grid_size[1],self.pt_fea_dim]  # 32
-        print("OUT SHAPE:", out_data_dim)
+        if not self.explain:
+            print("OUT SHAPE:", out_data_dim)
         out_data = torch.zeros(out_data_dim, dtype=torch.float32).to(cur_dev)
         out_data[unq[:,0],unq[:,1],unq[:,2],:] = processed_pooled_data  # Put back to the right order
         out_data = out_data.permute(0,3,1,2)  # Change dimensions
@@ -145,7 +150,8 @@ class ptBEVnet(nn.Module):
         if voxel_fea is not None:
             out_data = torch.cat((out_data, voxel_fea), 1)
 
-        return out_data
+        if self.explain:
+            return out_data
         #print("FIRST MODEL OUTPUT:", (out_data > 0).sum())
         
         # run through network
